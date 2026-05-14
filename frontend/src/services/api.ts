@@ -53,6 +53,8 @@ export const interviewApi = {
     api.post(`/interview/sessions/${sessionId}/finish`),
   evaluate: (sessionId: string) =>
     api.post(`/interview/sessions/${sessionId}/evaluate`),
+  deleteSession: (sessionId: string) =>
+    api.delete(`/interview/sessions/${sessionId}`),
 }
 
 // 报告统计

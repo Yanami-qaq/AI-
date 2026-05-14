@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { BrainCircuit, Server, Globe, Bot, ClipboardX, History, Loader2 } from 'lucide-react'
+import { BrainCircuit, Server, Globe, Bot, ClipboardX, History, Loader2, Trash2, X } from 'lucide-react'
 import { interviewApi } from '../services/api'
 
 const POSITIONS: Record<string, { label: string; icon: typeof Server; color: string; bg: string }> = {
@@ -15,17 +15,84 @@ const STATUS_MAP: Record<string, { label: string; className: string }> = {
   abandoned: { label: '已放弃', className: 'bg-gray-100 text-gray-500' },
 }
 
+function DeleteConfirmDialog({
+  session,
+  onConfirm,
+  onCancel,
+  deleting,
+}: {
+  session: any
+  onConfirm: () => void
+  onCancel: () => void
+  deleting: boolean
+}) {
+  const pos = POSITIONS[session.position]
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6">
+        <div className="flex justify-between items-start mb-4">
+          <h2 className="font-bold text-gray-900 text-lg">删除记录</h2>
+          <button onClick={onCancel} className="text-gray-400 hover:text-gray-600 rounded-lg p-0.5 hover:bg-gray-100 transition-colors">
+            <X size={18} />
+          </button>
+        </div>
+        <p className="text-gray-600 text-sm mb-1">
+          确认删除这条 <span className="font-medium text-gray-900">{pos?.label || session.position}</span> 面试记录吗？
+        </p>
+        <p className="text-gray-400 text-xs mb-6">对话内容和评估报告将一并删除，无法恢复。</p>
+        <div className="flex gap-3">
+          <button
+            onClick={onCancel}
+            className="flex-1 border border-gray-300 text-gray-600 rounded-xl py-2.5 text-sm hover:bg-gray-50 transition-colors"
+          >
+            取消
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={deleting}
+            className="flex-1 bg-red-500 hover:bg-red-600 disabled:opacity-50 text-white rounded-xl py-2.5 text-sm font-medium transition-colors flex items-center justify-center gap-1.5"
+          >
+            {deleting ? <><Loader2 size={14} className="animate-spin" />删除中...</> : '确认删除'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function HistoryPage() {
   const navigate = useNavigate()
   const [sessions, setSessions] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [deleteTarget, setDeleteTarget] = useState<any>(null)
+  const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
     interviewApi.listSessions().then(r => setSessions(r.data)).finally(() => setLoading(false))
   }, [])
 
+  const handleDelete = async () => {
+    if (!deleteTarget) return
+    setDeleting(true)
+    try {
+      await interviewApi.deleteSession(deleteTarget.id)
+      setSessions(prev => prev.filter(s => s.id !== deleteTarget.id))
+      setDeleteTarget(null)
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
+      {deleteTarget && (
+        <DeleteConfirmDialog
+          session={deleteTarget}
+          onConfirm={handleDelete}
+          onCancel={() => setDeleteTarget(null)}
+          deleting={deleting}
+        />
+      )}
       <nav className="bg-white border-b border-gray-200 px-6 py-3.5 flex justify-between items-center sticky top-0 z-10">
         <div className="flex items-center gap-2.5 text-blue-600">
           <BrainCircuit size={22} />
@@ -100,7 +167,7 @@ export default function HistoryPage() {
                     </div>
                   </div>
 
-                  <div className="flex gap-2 flex-shrink-0">
+                  <div className="flex gap-2 flex-shrink-0 items-center">
                     {isInProgress && (
                       <button
                         onClick={() => navigate(`/interview/${session.id}`)}
@@ -117,6 +184,13 @@ export default function HistoryPage() {
                         查看报告
                       </button>
                     )}
+                    <button
+                      onClick={() => setDeleteTarget(session)}
+                      className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                      title="删除记录"
+                    >
+                      <Trash2 size={15} />
+                    </button>
                   </div>
                 </div>
               )

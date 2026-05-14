@@ -184,6 +184,29 @@ async def finish_interview(
     return {"status": "completed", "session_id": session_id}
 
 
+@router.delete("/sessions/{session_id}", status_code=204)
+async def delete_session(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(InterviewSession)
+        .where(InterviewSession.id == session_id, InterviewSession.user_id == current_user.id)
+        .options(selectinload(InterviewSession.messages), selectinload(InterviewSession.evaluation))
+    )
+    session = result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="面试会话不存在")
+
+    for msg in session.messages:
+        await db.delete(msg)
+    if session.evaluation:
+        await db.delete(session.evaluation)
+    await db.delete(session)
+    await db.commit()
+
+
 @router.post("/sessions/{session_id}/evaluate", response_model=EvaluationResponse)
 async def trigger_evaluation(
     session_id: str,
