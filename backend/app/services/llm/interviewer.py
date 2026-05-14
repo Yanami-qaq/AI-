@@ -1,5 +1,6 @@
 import json
-from app.services.llm.client import chat_completion
+from collections.abc import AsyncGenerator
+from app.services.llm.client import chat_completion, stream_chat_completion
 from app.services.llm.prompts import (
     get_interviewer_system_prompt,
     get_evaluation_prompt,
@@ -28,6 +29,19 @@ async def get_interviewer_reply(
     is_end = INTERVIEW_END_MARKER in reply
     clean_reply = reply.replace(INTERVIEW_END_MARKER, "").strip()
     return clean_reply, is_end
+
+
+async def stream_interviewer_reply(
+    position: str,
+    history: list[dict],
+    rag_context: str = "",
+) -> AsyncGenerator[str, None]:
+    system = get_interviewer_system_prompt(position)
+    if rag_context:
+        system += f"\n\n【参考知识库】\n{rag_context}"
+    messages = [{"role": "system", "content": system}] + history
+    async for chunk in stream_chat_completion(messages, temperature=0.6):
+        yield chunk
 
 
 async def evaluate_interview(position: str, messages: list) -> dict:

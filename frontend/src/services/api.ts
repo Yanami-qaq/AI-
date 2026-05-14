@@ -57,6 +57,31 @@ export const interviewApi = {
     api.delete(`/interview/sessions/${sessionId}`),
 }
 
+export async function* streamSendMessage(sessionId: string, content: string) {
+  const token = localStorage.getItem('token') || ''
+  const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000/api'}/interview/sessions/${sessionId}/chat/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ content }),
+  })
+  if (!response.ok) throw new Error(`HTTP ${response.status}`)
+  const reader = response.body!.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+    for (const line of lines) {
+      if (line.startsWith('data: ') && line.length > 6) {
+        yield JSON.parse(line.slice(6)) as { delta?: string; done?: boolean; is_end?: boolean; full_content?: string }
+      }
+    }
+  }
+}
+
 // 报告统计
 export const reportApi = {
   getStats: () => api.get('/report/stats'),

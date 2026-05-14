@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { interviewApi } from '../services/api'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import { interviewApi, streamSendMessage } from '../services/api'
 import { Mic, MicOff, Send, LogOut, X, Bot, Clock, CheckCircle, Loader2 } from 'lucide-react'
 
 const POSITION_LABELS: Record<string, string> = {
@@ -60,12 +62,41 @@ function FinishConfirmDialog({
   )
 }
 
+// AI 消息用 Markdown 渲染，候选人消息用纯文本
+function MessageContent({ role, content }: { role: Message['role']; content: string }) {
+  if (role === 'candidate') {
+    return <span className="whitespace-pre-wrap">{content}</span>
+  }
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+        ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-0.5">{children}</ul>,
+        ol: ({ children }) => <ol className="list-decimal list-inside mb-2 space-y-0.5">{children}</ol>,
+        li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+        strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+        code: ({ children, className }) => {
+          const isBlock = !!className
+          return isBlock
+            ? <code className="block bg-gray-100 text-gray-800 rounded-lg px-3 py-2 text-xs font-mono my-2 overflow-x-auto">{children}</code>
+            : <code className="bg-gray-100 text-gray-800 rounded px-1 py-0.5 text-xs font-mono">{children}</code>
+        },
+        pre: ({ children }) => <pre className="my-2">{children}</pre>,
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  )
+}
+
 export default function InterviewPage() {
   const { sessionId } = useParams<{ sessionId: string }>()
   const navigate = useNavigate()
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(false)    // 等待第一个 token（显示 dots）
+  const [streaming, setStreaming] = useState(false) // 流式进行中（禁用输入）
   const [finishing, setFinishing] = useState(false)
   const [recording, setRecording] = useState(false)
   const [position, setPosition] = useState('')
@@ -90,10 +121,7 @@ export default function InterviewPage() {
 
   const startTimer = (startedAt: Date) => {
     startedAtRef.current = startedAt
-    const tick = () => {
-      const diff = Math.floor((Date.now() - startedAt.getTime()) / 1000)
-      setElapsedSeconds(diff)
-    }
+    const tick = () => setElapsedSeconds(Math.floor((Date.now() - startedAt.getTime()) / 1000))
     tick()
     timerRef.current = setInterval(tick, 1000)
   }
@@ -127,18 +155,44 @@ export default function InterviewPage() {
   }
 
   const sendMessage = async (content: string) => {
-    if (!sessionId || !content.trim() || loading) return
+    if (!sessionId || !content.trim() || loading || streaming) return
+    setStreaming(true)
     setLoading(true)
     setMessages(prev => [...prev, { role: 'candidate', content }])
     setInput('')
+
+    let firstChunk = true
     try {
-      const res = await interviewApi.sendMessage(sessionId, content)
-      setMessages(prev => [...prev, { role: 'interviewer', content: res.data.reply }])
-      if (res.data.is_end) {
-        handleInterviewEnd()
+      for await (const event of streamSendMessage(sessionId, content)) {
+        if (event.delta) {
+          if (firstChunk) {
+            firstChunk = false
+            setLoading(false)
+            setMessages(prev => [...prev, { role: 'interviewer', content: event.delta! }])
+          } else {
+            setMessages(prev => {
+              const updated = [...prev]
+              const last = updated[updated.length - 1]
+              if (last.role === 'interviewer') {
+                updated[updated.length - 1] = { ...last, content: last.content + event.delta }
+              }
+              return updated
+            })
+          }
+        }
+        if (event.done) {
+          // 用服务端清理后的完整内容替换（去掉 INTERVIEW_END 标记）
+          setMessages(prev => {
+            const updated = [...prev]
+            updated[updated.length - 1] = { role: 'interviewer', content: event.full_content! }
+            return updated
+          })
+          if (event.is_end) handleInterviewEnd()
+        }
       }
     } finally {
       setLoading(false)
+      setStreaming(false)
     }
   }
 
@@ -197,6 +251,8 @@ export default function InterviewPage() {
       sendMessage(input)
     }
   }
+
+  const busy = loading || streaming
 
   if (initializing) {
     return (
@@ -268,13 +324,13 @@ export default function InterviewPage() {
                 </div>
               )}
               <div
-                className={`max-w-[78%] rounded-2xl px-4 py-3 text-sm leading-loose whitespace-pre-wrap ${
+                className={`max-w-[78%] rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-sm ${
                   msg.role === 'candidate'
-                    ? 'bg-blue-600 text-white rounded-br-sm shadow-sm'
-                    : 'bg-white border border-gray-200 text-gray-800 rounded-bl-sm shadow-sm'
+                    ? 'bg-blue-600 text-white rounded-br-sm'
+                    : 'bg-white border border-gray-200 text-gray-800 rounded-bl-sm'
                 }`}
               >
-                {msg.content}
+                <MessageContent role={msg.role} content={msg.content} />
               </div>
               {msg.role === 'candidate' && (
                 <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-gray-600 text-xs font-bold ml-3 flex-shrink-0 mt-1">
@@ -284,6 +340,7 @@ export default function InterviewPage() {
             </div>
           ))}
 
+          {/* 等待第一个 token 时显示 dots */}
           {loading && (
             <div className="flex justify-start">
               <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center mr-3 flex-shrink-0">
@@ -309,7 +366,7 @@ export default function InterviewPage() {
           <div className="max-w-3xl mx-auto flex gap-3 items-end">
             <button
               onClick={() => setShowFinishDialog(true)}
-              disabled={loading}
+              disabled={busy}
               className="text-gray-400 hover:text-red-500 disabled:opacity-40 transition-colors p-2 flex-shrink-0 rounded-lg hover:bg-red-50"
               title="结束面试"
             >
@@ -323,12 +380,12 @@ export default function InterviewPage() {
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              disabled={loading}
+              disabled={busy}
             />
 
             <button
               onClick={recording ? stopRecording : startRecording}
-              disabled={loading}
+              disabled={busy}
               className={`p-2.5 rounded-xl flex-shrink-0 transition-colors ${
                 recording
                   ? 'bg-red-500 text-white hover:bg-red-600'
@@ -341,7 +398,7 @@ export default function InterviewPage() {
 
             <button
               onClick={() => sendMessage(input)}
-              disabled={loading || !input.trim()}
+              disabled={busy || !input.trim()}
               className="bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white p-2.5 rounded-xl flex-shrink-0 transition-colors"
             >
               <Send size={18} />

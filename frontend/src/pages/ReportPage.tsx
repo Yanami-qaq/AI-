@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { RadarChart, PolarGrid, PolarAngleAxis, Radar, ResponsiveContainer } from 'recharts'
 import { CheckCircle2, AlertTriangle, Lightbulb, ClipboardList, Loader2 } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { interviewApi } from '../services/api'
 
 const POSITION_LABELS: Record<string, string> = {
@@ -207,8 +209,19 @@ export default function ReportPage() {
             <ClipboardList size={18} className="text-gray-500" />
             详细评估报告
           </h2>
-          <div className="bg-gray-50 rounded-xl p-5">
-            <p className="text-gray-700 text-sm leading-loose whitespace-pre-wrap">{evaluation.detailed_report}</p>
+          <div className="bg-gray-50 rounded-xl p-5 text-sm text-gray-700 leading-relaxed prose-sm">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-0.5">{children}</ul>,
+                ol: ({ children }) => <ol className="list-decimal list-inside mb-2 space-y-0.5">{children}</ol>,
+                strong: ({ children }) => <strong className="font-semibold text-gray-900">{children}</strong>,
+                code: ({ children }) => <code className="bg-gray-200 rounded px-1 py-0.5 text-xs font-mono">{children}</code>,
+              }}
+            >
+              {evaluation.detailed_report}
+            </ReactMarkdown>
           </div>
         </div>
       </div>

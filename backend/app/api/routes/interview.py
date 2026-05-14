@@ -1,18 +1,22 @@
+import json
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from datetime import datetime
-from app.core.database import get_db
+from app.core.database import get_db, AsyncSessionLocal
 from app.models.user import User
 from app.models.interview import InterviewSession, InterviewMessage, Evaluation
 from app.schemas.interview import (
     StartSessionRequest, ChatRequest, SessionResponse, SessionDetailResponse, EvaluationResponse
 )
 from app.api.deps import get_current_user
-from app.services.llm.interviewer import get_interviewer_reply, evaluate_interview
+from app.services.llm.interviewer import get_interviewer_reply, stream_interviewer_reply, evaluate_interview
 from app.services.rag.retriever import retrieve_context
 from app.services.speech.transcriber import transcribe_audio
+
+INTERVIEW_END_MARKER = "[INTERVIEW_END]"
 
 router = APIRouter(prefix="/interview", tags=["面试"])
 
@@ -140,6 +144,75 @@ async def send_message(
 
     await db.commit()
     return {"reply": reply, "is_end": is_end, "session_id": session_id}
+
+
+@router.post("/sessions/{session_id}/chat/stream")
+async def send_message_stream(
+    session_id: str,
+    body: ChatRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """流式返回 AI 面试官回复（SSE）"""
+    result = await db.execute(
+        select(InterviewSession)
+        .where(InterviewSession.id == session_id, InterviewSession.user_id == current_user.id)
+        .options(selectinload(InterviewSession.messages))
+    )
+    session = result.scalar_one_or_none()
+    if not session or session.status != "in_progress":
+        raise HTTPException(status_code=400, detail="面试会话无效或已结束")
+
+    user_content = body.content.strip()
+    if not user_content:
+        raise HTTPException(status_code=400, detail="消息内容不能为空")
+
+    # 保存用户消息（在返回流之前完成，使用注入的 db session）
+    user_msg = InterviewMessage(session_id=session_id, role="candidate", content=user_content)
+    db.add(user_msg)
+    await db.commit()
+
+    rag_context = retrieve_context(session.position, user_content)
+    history = [
+        {"role": "assistant" if m.role == "interviewer" else "user", "content": m.content}
+        for m in sorted(session.messages, key=lambda x: x.created_at)
+    ]
+    history.append({"role": "user", "content": user_content})
+
+    position = session.position
+
+    async def event_generator():
+        full_reply = ""
+        async for chunk in stream_interviewer_reply(position, history, rag_context):
+            full_reply += chunk
+            yield f"data: {json.dumps({'delta': chunk}, ensure_ascii=False)}\n\n"
+
+        is_end = INTERVIEW_END_MARKER in full_reply
+        clean_reply = full_reply.replace(INTERVIEW_END_MARKER, "").strip()
+
+        # 用独立 session 持久化 AI 回复（原 db session 在响应返回后可能已关闭）
+        async with AsyncSessionLocal() as new_db:
+            ai_msg = InterviewMessage(session_id=session_id, role="interviewer", content=clean_reply)
+            new_db.add(ai_msg)
+            if is_end:
+                sess_res = await new_db.execute(
+                    select(InterviewSession)
+                    .where(InterviewSession.id == session_id)
+                    .options(selectinload(InterviewSession.messages))
+                )
+                sess = sess_res.scalar_one()
+                sess.status = "completed"
+                sess.ended_at = datetime.utcnow()
+                sess.total_questions = sum(1 for m in sess.messages if m.role == "interviewer")
+            await new_db.commit()
+
+        yield f"data: {json.dumps({'done': True, 'is_end': is_end, 'full_content': clean_reply}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/sessions/{session_id}/voice")

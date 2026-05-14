@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { BrainCircuit, Server, Globe, Bot, ClipboardX, History, Loader2, Trash2, X } from 'lucide-react'
 import { interviewApi } from '../services/api'
@@ -13,6 +13,43 @@ const STATUS_MAP: Record<string, { label: string; className: string }> = {
   in_progress: { label: '进行中', className: 'bg-yellow-100 text-yellow-700' },
   completed: { label: '已完成', className: 'bg-green-100 text-green-700' },
   abandoned: { label: '已放弃', className: 'bg-gray-100 text-gray-500' },
+}
+
+const POS_FILTERS = [
+  { key: '', label: '全部岗位' },
+  { key: 'java_backend', label: 'Java后端' },
+  { key: 'web_frontend', label: 'Web前端' },
+  { key: 'python_algorithm', label: 'Python算法' },
+]
+
+const STATUS_FILTERS = [
+  { key: '', label: '全部状态' },
+  { key: 'completed', label: '已完成' },
+  { key: 'in_progress', label: '进行中' },
+  { key: 'abandoned', label: '已放弃' },
+]
+
+function FilterChip({
+  label,
+  active,
+  onClick,
+}: {
+  label: string
+  active: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
+        active
+          ? 'bg-blue-600 text-white'
+          : 'bg-white border border-gray-200 text-gray-600 hover:border-blue-300 hover:text-blue-600'
+      }`}
+    >
+      {label}
+    </button>
+  )
 }
 
 function DeleteConfirmDialog({
@@ -66,6 +103,8 @@ export default function HistoryPage() {
   const [loading, setLoading] = useState(true)
   const [deleteTarget, setDeleteTarget] = useState<any>(null)
   const [deleting, setDeleting] = useState(false)
+  const [posFilter, setPosFilter] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')
 
   useEffect(() => {
     interviewApi.listSessions().then(r => setSessions(r.data)).finally(() => setLoading(false))
@@ -83,6 +122,16 @@ export default function HistoryPage() {
     }
   }
 
+  const filtered = useMemo(() =>
+    sessions.filter(s =>
+      (!posFilter || s.position === posFilter) &&
+      (!statusFilter || s.status === statusFilter)
+    ),
+    [sessions, posFilter, statusFilter]
+  )
+
+  const hasFilters = posFilter !== '' || statusFilter !== ''
+
   return (
     <div className="min-h-screen bg-gray-50">
       {deleteTarget && (
@@ -93,9 +142,10 @@ export default function HistoryPage() {
           deleting={deleting}
         />
       )}
+
       <nav className="bg-white border-b border-gray-200 px-6 py-3.5 flex justify-between items-center sticky top-0 z-10">
-        <div className="flex items-center gap-2.5 text-blue-600">
-          <BrainCircuit size={22} />
+        <div className="flex items-center gap-2.5">
+          <BrainCircuit size={22} className="text-blue-600" />
           <span className="font-bold text-gray-900 text-base">AI模拟面试平台</span>
         </div>
         <Link to="/" className="text-sm text-blue-600 hover:text-blue-700 border border-blue-200 px-3 py-1.5 rounded-lg hover:bg-blue-50 transition-colors">
@@ -104,10 +154,43 @@ export default function HistoryPage() {
       </nav>
 
       <div className="max-w-3xl mx-auto px-6 py-8">
-        <div className="flex items-center gap-2.5 mb-6">
-          <History size={20} className="text-gray-500" />
-          <h1 className="text-xl font-bold text-gray-900">面试历史记录</h1>
+        {/* 标题 + 计数 */}
+        <div className="flex items-center justify-between mb-5">
+          <div className="flex items-center gap-2.5">
+            <History size={20} className="text-gray-500" />
+            <h1 className="text-xl font-bold text-gray-900">面试历史记录</h1>
+            {!loading && sessions.length > 0 && (
+              <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
+                {filtered.length}/{sessions.length}
+              </span>
+            )}
+          </div>
         </div>
+
+        {/* 筛选栏 */}
+        {!loading && sessions.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-5">
+            <div className="flex gap-1.5 flex-wrap">
+              {POS_FILTERS.map(f => (
+                <FilterChip key={f.key} label={f.label} active={posFilter === f.key} onClick={() => setPosFilter(f.key)} />
+              ))}
+            </div>
+            <div className="w-px bg-gray-200 mx-1 self-stretch hidden sm:block" />
+            <div className="flex gap-1.5 flex-wrap">
+              {STATUS_FILTERS.map(f => (
+                <FilterChip key={f.key} label={f.label} active={statusFilter === f.key} onClick={() => setStatusFilter(f.key)} />
+              ))}
+            </div>
+            {hasFilters && (
+              <button
+                onClick={() => { setPosFilter(''); setStatusFilter('') }}
+                className="text-xs text-gray-400 hover:text-gray-600 px-2 py-1.5 transition-colors"
+              >
+                清除筛选
+              </button>
+            )}
+          </div>
+        )}
 
         {loading && (
           <div className="flex items-center justify-center py-16">
@@ -131,9 +214,22 @@ export default function HistoryPage() {
           </div>
         )}
 
-        {!loading && sessions.length > 0 && (
+        {!loading && sessions.length > 0 && filtered.length === 0 && (
+          <div className="bg-white border border-gray-200 rounded-2xl py-12 px-6 text-center">
+            <ClipboardX size={32} className="text-gray-300 mx-auto mb-3" />
+            <p className="text-gray-400 text-sm">没有符合筛选条件的记录</p>
+            <button
+              onClick={() => { setPosFilter(''); setStatusFilter('') }}
+              className="mt-3 text-blue-600 hover:text-blue-700 text-sm"
+            >
+              清除筛选
+            </button>
+          </div>
+        )}
+
+        {!loading && filtered.length > 0 && (
           <div className="space-y-3">
-            {sessions.map(session => {
+            {filtered.map(session => {
               const pos = POSITIONS[session.position]
               const status = STATUS_MAP[session.status] || { label: session.status, className: 'bg-gray-100 text-gray-500' }
               const Icon = pos?.icon || Server
@@ -144,12 +240,12 @@ export default function HistoryPage() {
                   key={session.id}
                   className="bg-white rounded-2xl border border-gray-200 p-5 flex justify-between items-center hover:border-blue-200 hover:bg-gray-50 transition-all"
                 >
-                  <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-4 min-w-0">
                     <div className={`w-10 h-10 rounded-xl ${pos?.bg || 'bg-gray-100'} flex items-center justify-center flex-shrink-0`}>
                       <Icon size={18} className={pos?.color || 'text-gray-500'} />
                     </div>
-                    <div>
-                      <div className="flex items-center gap-2 mb-1">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
                         <span className="font-semibold text-gray-900 text-sm">{pos?.label || session.position}</span>
                         <span className={`text-xs px-2 py-0.5 rounded-full font-medium flex items-center gap-1 ${status.className}`}>
                           {isInProgress && (
@@ -167,7 +263,7 @@ export default function HistoryPage() {
                     </div>
                   </div>
 
-                  <div className="flex gap-2 flex-shrink-0 items-center">
+                  <div className="flex gap-2 flex-shrink-0 items-center ml-3">
                     {isInProgress && (
                       <button
                         onClick={() => navigate(`/interview/${session.id}`)}
