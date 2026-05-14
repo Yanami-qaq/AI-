@@ -1,0 +1,13 @@
+@import "tailwindcss";
+@source "../src/**/*.{ts,tsx}";
+
+body {
+  margin: 0;
+  font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  background-color: #f8fafc;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100vh;
+}
